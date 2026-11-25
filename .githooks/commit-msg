@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Hook commit-msg: valida se a mensagem de commit segue o padrão
+# Conventional Commits (https://www.conventionalcommits.org/pt-br/v1.0.0/).
+#
+# Ativação (uma vez por clone):
+#   bash .githooks/install.sh
+#
+# O Git passa como $1 o caminho do arquivo que contém a mensagem digitada.
+set -euo pipefail
+
+msg_file="$1"
+
+# Tipos aceitos. `feat` e `fix` são exigidos pela spec; os demais seguem a
+# convenção Angular, citada pela própria especificação como referência.
+# Ajuste esta lista se o time quiser adicionar/remover tipos.
+TYPES="feat|fix|build|chore|ci|docs|style|refactor|perf|test|revert"
+
+# Limite de tamanho do cabeçalho. NÃO faz parte da spec oficial — é uma
+# boa prática comum (mantém o `git log --oneline` legível). Ajuste ou
+# remova a checagem abaixo se o time não quiser esse limite.
+MAX_HEADER_LENGTH=100
+
+# Remove linhas de comentário (começam com '#') que o Git injeta no
+# arquivo de mensagem (ex.: ao usar `git commit -v`).
+content="$(grep -v '^#' "$msg_file" || true)"
+
+# Primeira linha não vazia = cabeçalho do commit.
+header="$(printf '%s\n' "$content" | awk 'NF{print; exit}')"
+
+if [ -z "$header" ]; then
+  echo "Erro: mensagem de commit vazia." >&2
+  exit 1
+fi
+
+# Comits gerados automaticamente pelo Git não seguem (e não precisam
+# seguir) o formato Conventional Commits — deixe passar sem validar.
+case "$header" in
+  "Merge "*|"Revert \""*|"fixup! "*|"squash! "*|"amend! "*)
+    exit 0
+    ;;
+esac
+
+header_pattern="^(${TYPES})(\([a-z0-9.,/_-]+\))?!?: .+$"
+
+if ! printf '%s' "$header" | grep -Eq "$header_pattern"; then
+  cat >&2 <<EOF
+Erro: a mensagem de commit não segue o padrão Conventional Commits.
+
+Cabeçalho recebido:
+  $header
+
+Formato esperado:
+  <tipo>[escopo][!]: <descrição>
+
+Tipos aceitos: feat, fix, build, chore, ci, docs, style, refactor, perf, test, revert
+O "!" antes dos dois-pontos indica uma breaking change (opcionalmente
+também descrita no rodapé, como "BREAKING CHANGE: ...").
+
+Exemplos válidos:
+  feat: adiciona endpoint de cadastro de pedidos
+  fix(orders): corrige NullPointerException ao buscar pedido inexistente
+  refactor(auth)!: remove suporte a login por API key
+
+Mais detalhes: https://www.conventionalcommits.org/pt-br/v1.0.0/
+EOF
+  exit 1
+fi
+
+if [ "${#header}" -gt "$MAX_HEADER_LENGTH" ]; then
+  echo "Erro: o cabeçalho do commit tem ${#header} caracteres (máximo: ${MAX_HEADER_LENGTH})." >&2
+  echo "Resuma a descrição e use o corpo do commit para detalhes." >&2
+  exit 1
+fi
+
+# Se houver conteúdo além do cabeçalho, a spec exige uma linha em branco
+# antes do corpo/rodapé.
+line_count="$(printf '%s\n' "$content" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')"
+if [ "$line_count" -gt 1 ]; then
+  second_line="$(printf '%s\n' "$content" | sed -n '2p')"
+  if [ -n "$second_line" ]; then
+    echo "Erro: deve haver uma linha em branco entre o cabeçalho e o corpo/rodapé do commit." >&2
+    exit 1
+  fi
+fi
+
+# "BREAKING CHANGE" é o único token que a spec exige em caixa alta. Se
+# aparecer em outra grafia (breaking change:, Breaking-Change: etc.),
+# avisa para corrigir.
+if printf '%s\n' "$content" | grep -Eqi '^breaking[ -]change:' \
+  && ! printf '%s\n' "$content" | grep -Eq '^BREAKING[ -]CHANGE:'; then
+  echo "Erro: o rodapé de breaking change deve ser exatamente 'BREAKING CHANGE:' ou 'BREAKING-CHANGE:' (em caixa alta)." >&2
+  exit 1
+fi
+
+exit 0
